@@ -112,7 +112,7 @@ function using the `-f` argument).
 A more complex example:
 [express-simple-lambda](https://github.com/Macro-swift/Examples/tree/feature/lambda-express-1/Sources/express-simple-lambda),
 it looks like this:
-<img src="https://zeezide.de/img/macro/MacroExpressSimple.png">
+<img src="https://zeezide.de/img/macro/MacroExpressSimple.png" width="50%">
 
 
 ## Usage: `swift lambda build`
