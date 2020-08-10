@@ -1,10 +1,113 @@
-# swift-lambda
+<h2>swift lambda
+  <img src="http://zeezide.com/img/lambda/swift-lambda-256x256.png"
+       align="right" width="128" height="128" />
+</h2>
 
-Build and deploy Swift Package Manager projects on AWS Lambda
+Build and deploy Swift Package Manager projects on AWS Lambda.
+
+`swift lambda` builds Swift projects using the
+[Swift AWS Lambda Runtime](https://github.com/swift-server/swift-aws-lambda-runtime)
+for deployment into
+[AWS Lambda](https://aws.amazon.com/lambda/)
+functions. 
+It uses a Swift
+[cross compilation toolchain](https://github.com/SPMDestinations/homebrew-tap)
+for
+[Amazon Linux](https://aws.amazon.com/amazon-linux-2/) 
+to build the project right on macOS, no Docker required.
+Simply call `swift lambda build`.
+
+A built Swift lambda can then be deployed using `swift lambda deploy`.
+
+Note: Due to a [bug](https://bugs.swift.org/browse/SR-13312) 
+      in Xcode 11's Swift 5.2.4, a Swift 5.3 install (e.g. Xcode beta 12) is 
+      required.
+
 
 ## Installation
 
-TODO
+First make sure `swift --version` shows a 5.3 release, it is currently required.
+
+`swift lambda` is easiest to install using [Homebrew](https://brew.sh),
+get it [over here](https://brew.sh).
+
+This single call installs `swift lambda` and all its dependencies:
+```bash
+$ brew install SPMDestinations/tap/swift-lambda
+```
+
+> It's a pretty big download at over 1GB (binary host & target Swift toolchains
+> from [Swift.org](https://swift.org/download/#releases) and the
+> [AWS CLI](https://docs.aws.amazon.com/cli/latest/userguide/cli-chap-install.html)).
+
+
+## Usage
+
+A simple Swift Lambda using
+[Macro](https://github.com/Macro-swift/MacroLambda).
+
+Setup the Swift package:
+```swift
+mkdir HelloWorld && cd HelloWorld
+swift package init --type executable
+open Package.swift # opens Xcode
+```
+
+Configure the `Package.swift` to look like this:
+```swift
+// swift-tools-version:5.2
+import PackageDescription
+
+let package = Package(
+  name         : "HelloWorld",
+  platforms    : [ .macOS(.v10_13) ], // <== add this
+  dependencies : [ // and add this dependency ↓
+    .package(url: "https://github.com/Macro-swift/MacroLambda.git",
+             from: "0.1.3"),
+    .package(url: "https://github.com/AlwaysRightInstitute/cows.git",
+             from: "1.0.0") // optional but fun
+  ],
+  targets: [
+    .target(name: "HelloWorld", 
+            dependencies: [ "MacroLambda", "cows" ])
+  ]
+)
+```
+
+Fill in the Lambda's code in the `main.swift`:
+
+```swift
+import MacroLambda
+
+let app = Express()
+app.use(bodyParser.text())
+
+app.post("/hello") { req, res, next in
+  res.send("Client sent: \(req.body.text ?? "~nothing~")")
+}
+
+app.get { req, res, next in
+  res.send("Welcome to Macro!\n")
+}
+
+// Lambda.run(app) // Not Yet
+app.listen(1337) {
+  console.log("server running on http://localhost:1337/")
+}
+```
+
+Build the package using `swift lambda build -d 5.2` and deploy it to AWS by
+calling `swift lambda deploy -d 5.2`.
+
+> The `-d 5.2` is necessary until AmazonLinux 5.3 development toolchains are
+> available.
+
+A more complex example:
+[express-simple-lambda](https://github.com/Macro-swift/Examples/tree/feature/lambda-express-1/Sources/express-simple-lambda),
+looks like this:
+<img src="https://zeezide.de/img/macro/MacroExpressSimple.png"
+     align="right" width="128" height="128" />
+
 
 ### Links
 
