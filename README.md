@@ -128,14 +128,14 @@ Modes:
   --clean build|dist                [default: build]
 
 Product:
-  -p, --product &lt;product&gt;           [default: directory name]
-  -d, --destination &lt;dest&gt;
+  -p, --product <product>           [default: directory name]
+  -d, --destination <dest>
 
 Options:
   -v, --verbose
   -s, --silent
   --static
-  --static-libs &lt;libs&gt;
+  --static-libs <libs>
 
 ```
 
@@ -156,9 +156,9 @@ will be used.
 Build Options:
   --skip-build                      (do not invoke swift lambda build)
   -c, --configuration debug|release [default: debug]
-  -d, --destination &lt;dest&gt;
+  -d, --destination <dest>
   --static
-  --static-libs &lt;libs&gt;
+  --static-libs <libs>
 
 Options:
   -v, --verbose
