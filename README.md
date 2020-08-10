@@ -20,6 +20,8 @@ Simply call `swift lambda build`.
 A built Swift lambda can then be deployed using `swift lambda deploy`
 (using either `aws lambda publish` or `sam deploy`).
 
+Blog article: [Deploying Swift on AWS Lambda](http://www.alwaysrightinstitute.com/macrolambda/).
+
 Note: Due to a [bug](https://bugs.swift.org/browse/SR-13312) 
       in Xcode 11's Swift 5.2.4, a Swift 5.3 install (e.g. Xcode beta 12) is 
       currently required.
@@ -192,6 +194,7 @@ Options:
 
 ## Links
 
+- [Deploying Swift on AWS Lambda](http://www.alwaysrightinstitute.com/macrolambda/)
 - [SPMDestinations](https://github.com/SPMDestinations/homebrew-tap)
 - [MacroLambda](https://github.com/Macro-swift/MacroLambda)
 - Amazon:
