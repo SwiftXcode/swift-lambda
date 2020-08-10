@@ -1,0 +1,448 @@
+#!/bin/bash
+#
+# Copyright 2017-2020 ZeeZide GmbH. All rights reserved.
+#
+# swift-lambda -- A collection of SwiftPM extensions to deal with building
+#                 AWS Lambda Swift projects.
+#
+# Additional variables used:
+#
+#     SPM_TARGET_BUILT_DIR        - .build/arm64-apple-ios7.0
+#     SPM_TARGET_BUILT_CONFIG_DIR - .build/arm64-apple-ios7.0/debug
+#
+
+ARGS="$@"
+#set -ve
+#set -e
+
+# usage
+
+usage() {
+	echo "usage: swift lambda build [mode] [options]"
+  echo
+  echo "Modes:"
+  echo "  -c, --configuration debug|release [default: debug]"
+  echo "  --clean build|dist                [default: build]"
+  echo
+  echo "Product:"
+  echo "  -p, --product <product>           [default: directory name]"
+  echo "  -d, --destination <dest>"
+  echo
+  echo "Options:"
+#  echo "  --color auto|always|never         [default: auto]"
+  echo "  -v, --verbose"
+  echo "  -s, --silent"
+  echo "  --static"
+  echo "  --static-libs <libs>"
+  echo
+}
+
+
+# ********** Parse Arguments ********************
+
+while [[ $# -gt 0 ]]; do
+  arg="$1"
+  case $arg in
+    -v|--verbose)
+      shift
+      verbose=yes
+      ;;
+    -s|--silent)
+      shift
+      verbose=no
+      ;;
+    -c|--configuration)
+      CONFIGURATION="$2"
+      shift
+      shift
+      ;;
+    -p|--product)
+      PRODUCT_NAME="$2"
+      shift
+      shift
+      ;;
+    -d|--destination)
+      # FIXME: make this more generic
+      if [[ "$2" == "5.2" ]]; then
+        SPM_DESTINATION=/usr/local/lib/swift/dst/x86_64-unknown-linux/swift-5.2-amazonlinux2.xtoolchain
+      elif [[ "$2" == "5.3" ]]; then
+        SPM_DESTINATION=/usr/local/lib/swift/dst/x86_64-unknown-linux/swift-5.3-amazonlinux2.xtoolchain
+      else
+        SPM_DESTINATION="$2"
+      fi
+      shift
+      shift
+      ;;
+    --static)
+      shift
+      static=yes
+      ;;
+    --static-libs)
+      static="yes"
+      static_libs="$2"
+      shift
+      shift
+      ;;
+    --clean)
+      if [[ "$2" == "dist" ]]; then
+        CLEAN_MODE=dist
+        shift
+      elif [[ "$2" == "build" ]]; then
+        CLEAN_MODE=build
+        shift
+      else
+        CLEAN_MODE=build
+      fi
+      shift
+      ;;
+    --help)
+      usage
+      exit 0
+      ;;
+    *)
+      echo "Unknown argument: $1"
+      echo
+      usage
+      exit 99
+      ;;
+  esac
+done
+
+verbose=${verbose:=no}
+spm_verbose=${spm_verbose:=no}
+
+SCRIPT_START_TS=${SCRIPT_START_TS:=$(date +%s)}
+SCRIPT_DIR=${SCRIPT_DIR:=$(dirname "$0")}
+
+# ********** Load common stuff ******************
+
+if [[ "x${SWIFT_LAMBDA_ENV_SOURCED}" != "yes" ]]; then
+  SWIFT_LAMBDA_ENV_SOURCED=yes verbose=no . "${SCRIPT_DIR}/swift-lambda-env"
+  rc=$?; if [ $rc -ne 0 ]; then exit $rc; fi
+fi
+
+# ********** Check Build status *****************
+
+# Those are again set below (FIXME)
+PACKAGE_CHECKOUT_DIR="${SPM_BUILD_DIR}/checkouts"
+
+if [[ "x$verbose" = "xyes" ]]; then
+  echo "Build setup:"
+  echo "  Checkout dir: ${PACKAGE_CHECKOUT_DIR}"
+fi
+
+
+# Make sure the target dir exists
+
+if [[ ! -d "${SPM_PACKAGE_DIR}" ]]; then
+  if [[ "x$verbose" = "xyes" ]]; then
+    echo "Create package build dir: ${SPM_PACKAGE_DIR}"
+  fi
+  mkdir -p "${SPM_PACKAGE_DIR}"
+fi
+
+
+# Check for Package.swift
+  
+if [[ ! -f "${SPM_CONFIG}" ]]; then
+  if [[ "x$verbose" = "xyes" ]]; then
+    echo "Missing Package.swift?: ${SPM_CONFIG}"
+  fi
+fi
+
+
+# ********** Are we in CLEAN mode? **************
+
+if [[ "$ARGS" == *"--clean"* ]]; then
+  if [[ "$ARGS" == *"--clean dist"* ]]; then
+    CLEAN_MODE=dist
+  elif [[ "$ARGS" == *"--clean build"* ]]; then
+    CLEAN_MODE=build
+  else
+    CLEAN_MODE=build
+  fi
+fi
+
+clean() {
+  if [[ "x$verbose" = "xyes" ]]; then echo -n "Cleaning package .."; fi
+    
+  # invoke SPM clean
+  SWIFT_CLEAN="${SWIFT_DRIVER} package clean"
+  
+  ${SWIFT_CLEAN} # $ARGS - needs cleanup
+  rc=$?
+  if [ $rc -ne 0 ]; then 
+    echo ".. FAILED?!"
+    exit $rc;
+  fi
+  
+  rm -rf "${LAMBDA_BUILD_DIR}"
+  
+  # TBD: anything else :-)  
+  if [[ "x${CLEAN_MODE}" = "xdist" ]]; then
+    if [[ "x$verbose" = "xyes" ]]; then echo -n ".. dist-clean .."; fi
+    if [[ -d "${SPM_BUILD_DIR}" ]]; then
+      rm -rf "${SPM_BUILD_DIR}"
+      rc=$?; if [ $rc -ne 0 ]; then echo ".. FAILED! ($RC)"; exit $rc; fi
+    fi
+    if [[ -f "${SPM_PACKAGE_DIR}/Package.resolved" ]]; then
+      rm "${SPM_PACKAGE_DIR}/Package.resolved"
+      rc=$?; if [ $rc -ne 0 ]; then echo ".. FAILED! ($RC)"; exit $rc; fi
+    fi
+  fi
+  
+  if [[ "x$verbose" = "xyes" ]]; then echo ".. done."; fi
+}
+
+if [[ -n "${CLEAN_MODE}" ]]; then
+  clean
+  exit 0
+fi
+
+
+
+# ********** Check Build status *****************
+# Note: must happen AFTER image unpack!
+
+SPM_NEEDS_BUILD=no
+
+# -nt checks whether the .resolved exists *and* is newer than the rhs
+if [[ "${SPM_PACKAGE_RESOLVED}" -nt "${SPM_CONFIG}" ]]; then
+  SPM_RESOLVED_UP2DATE=yes
+else
+  # .resolved either missing, or older than config
+  SPM_RESOLVED_UP2DATE=no
+fi
+
+if [[ "x$verbose" = "xyes" ]]; then
+  echo "Build status:"
+  echo "  Package resolved: ${SPM_RESOLVED_UP2DATE}"
+  echo "    resolved:       ${SPM_PACKAGE_RESOLVED}"
+  echo "    package:        ${SPM_CONFIG}"
+fi
+
+
+if [[ "x${BUILDING_IN_HOMEBREW}" = "xyes" ]]; then
+  # We are already running in a sandbox. Running the SPM sandbox in the
+  # Brew sandbox doesn't work.
+  HOMEBREW_SPM_FLAGS=--disable-sandbox
+fi
+
+if [[ ! -f "${SPM_DESTINATION_FILE}" ]]; then
+  echo "Did not find SPM destination: ${SPM_DESTINATION_FILE}"
+  exit 43
+fi
+
+XTOOLCHAIN_SDK=$(jq -r ".sdk" ${SPM_DESTINATION_FILE})
+if [[ "x$verbose" = "xyes" ]]; then
+  echo "SDK: ${XTOOLCHAIN_SDK}"
+fi
+if [[ ! -d "${XTOOLCHAIN_SDK}" ]]; then
+  echo "Did not find SPM destination SDK: ${XTOOLCHAIN_SDK}"
+  exit 44
+fi
+
+# ********** SPM Build **************************
+
+spmBuild() {  
+  SWIFT_TARGET_OPT="-Xswiftc -target -Xswiftc ${TARGET}"
+  SWIFT_PRODUCT_OPT=""
+  if [[ "x${PRODUCT_NAME}" != "x" ]]; then
+    SWIFT_PRODUCT_OPT="--product ${PRODUCT_NAME}"
+  fi
+  
+  TARGET_OPT="${SWIFT_TARGET_OPT} ${SWIFT_TARGET_OPT//Xswiftc/Xcc} -Xcc -Wno-unused-command-line-argument"
+  
+  # use static linking for Lambda
+  if [[ "x${static}" = "yes" ]]; then
+    STATIC_LINK_OPT="-Xswiftc -static-stdlib"
+    for static_lib in "${static_libs_a[@]}"; do
+      STATIC_LINK_OPT="${STATIC_LINK_OPT} -Xswiftc -l${static_lib}"
+    done
+  fi
+  
+  # seems to work for simulator too, but macOS?
+  # required for device build
+  if [[ "x${SPM_USE_BITCODE}" = "xyes" ]]; then
+    BITCODE_OPT="-Xswiftc -embed-bitcode -Xcc -fembed-bitcode"
+  fi
+  
+  
+  OLD_PWD="${PWD}"
+  cd "${SPM_PACKAGE_DIR}"
+
+  if [[ "x${spm_verbose}" = "xyes" ]]; then
+    SPM_VERBOSE_FLAGS="--verbose"
+  else
+    SPM_VERBOSE_FLAGS=""
+  fi
+  
+  # gives issues w/ spaces: --package-path "${SPM_PACKAGE_DIR}",
+  # and we are within the dir anyways.
+  if [[ "x${verbose}" = "xyes" ]]; then
+    echo "SPM:" ${SWIFT_PROGRESS} ${SWIFT_DRIVER} build \
+      ${HOMEBREW_SPM_FLAGS} ${SPM_VERBOSE_FLAGS} \
+        --configuration ${SPM_BUILD_CONFIG} \
+        --destination "${SPM_DESTINATION_FILE}" \
+        ${TARGET_OPT} ${SDK_OPT} ${SYSROOT_OPT} ${BITCODE_OPT} ${INC_OPT} \
+        ${STATIC_LINK_OPT} ${SWIFT_PRODUCT_OPT}
+  fi
+  ${SWIFT_PROGRESS} ${SWIFT_DRIVER} build \
+    ${HOMEBREW_SPM_FLAGS} ${SPM_VERBOSE_FLAGS} \
+      --configuration ${SPM_BUILD_CONFIG} \
+      --destination "${SPM_DESTINATION_FILE}" \
+      ${TARGET_OPT} ${SDK_OPT} ${SYSROOT_OPT} ${BITCODE_OPT} ${INC_OPT} \
+      ${STATIC_LINK_OPT} ${SWIFT_PRODUCT_OPT}
+  rc=$?
+  
+  TIME_ELAPSED=$((`date +%s` - SCRIPT_START_TS))
+  if [ $rc -ne 0 ]; then exit $rc; fi
+  
+  cd "${OLD_PWD}"
+}
+
+spmBuild
+
+if [[ ! -f "${SPM_EXECUTABLE_BUILD_PRODUCT}" ]]; then
+  echo "Did not find executable ${PRODUCT_NAME} in:"
+  echo
+  echo "  ${SPM_EXECUTABLE_BUILD_PRODUCT}"
+  echo
+  exit 48
+fi
+
+
+# ********** grab locations *********************
+
+if [[ -d "${SPM_BUILD_DIR}/checkouts" ]]; then
+  PACKAGE_CHECKOUT_DIR="${SPM_BUILD_DIR}/checkouts"
+elif [[ -d "${SPM_PACKAGE_DIR}/Packages" ]]; then # 3.0
+  PACKAGE_CHECKOUT_DIR="${SPM_PACKAGE_DIR}/Packages"
+else
+  echo "swift package resolve failed."
+  exit 42
+fi
+
+
+# ********** Archive ****************************
+
+prepareLambdaDir() {
+  rm   -rf "${LAMBDA_BUILD_DIR}"
+  mkdir -p "${LAMBDA_BUILD_DIR}"
+}
+
+embedInZip() {
+  # a - preserve attributes
+  # c - clone
+  # H - follow symbolic links
+  cp -acH "$1" "${LAMBDA_BUILD_DIR}/"
+}
+embedSourcesDirInZip() {
+  if [[ -d "${SPM_PACKAGE_SOURCE_DIR}/Sources/${PRODUCT_NAME}/$1" ]]; then
+    if [[ "x${verbose}" = "xyes" ]]; then
+      echo "  Embedding Sources resource dir: '$1'"
+    fi
+    embedInZip "${SPM_PACKAGE_SOURCE_DIR}/Sources/${PRODUCT_NAME}/$1"
+  elif [[ -d "${SPM_PACKAGE_SOURCE_DIR}/$1" ]]; then
+    if [[ "x${verbose}" = "xyes" ]]; then
+      echo "  Embedding root resource dir: '$1'"
+    fi
+    embedInZip "${SPM_PACKAGE_SOURCE_DIR}/$1"
+  fi
+}
+
+copySharedLibraryDependencies() {
+  XTOOLCHAIN_SDK=$(jq -r ".sdk" ${SPM_DESTINATION_FILE})
+  USED_LIBS=$(objdump -p ${SPM_BUILD_DIR}/${TARGET}/${SPM_BUILD_CONFIG}/${PRODUCT_NAME} \
+             | grep NEEDED | awk '{print $2}')
+
+  DYLIB_TARGET_TOOLCHAIN_DIR="${XTOOLCHAIN_SDK}/usr/lib/swift/linux"
+  for lib in $USED_LIBS; do
+    abslib="${DYLIB_TARGET_TOOLCHAIN_DIR}/${lib}"
+    if [[ -r "${LAMBDA_BUILD_DIR}/$lib" ]]; then
+      if [[ "x${verbose}" = "xyes" ]]; then
+        echo "  Already embedded: ${lib}"
+      fi
+    elif [[ -f "${abslib}" ]]; then
+      if [[ "x${verbose}" = "xyes" ]]; then
+        echo "  Embedding: ${lib}"
+      fi
+      embedInZip "${abslib}"
+      
+      # Ups, can Bash funcs recurse? :-) W/ proper local vars maybe.
+      USED_LIB_LIBS=$(objdump -p ${abslib} | grep NEEDED | awk '{print $2}')
+      for usedlib in $USED_LIB_LIBS; do
+        usedabslib="${DYLIB_TARGET_TOOLCHAIN_DIR}/${usedlib}"
+        if [[ -r "${LAMBDA_BUILD_DIR}/$usedlib" ]]; then
+          if [[ "x${verbose}" = "xyes" ]]; then
+            echo "    Already embedded: ${usedlib}"
+          fi
+        elif [[ -f "${usedabslib}" ]]; then
+          if [[ "x${verbose}" = "xyes" ]]; then
+            echo "    Embedding: ${usedlib}"
+          fi
+          embedInZip "${usedabslib}"
+        else
+          if [[ "x${verbose}" = "xyes" ]]; then
+            echo "    Not embedding: ${usedlib}"
+          fi
+        fi
+      done
+    else
+      if [[ "x${verbose}" = "xyes" ]]; then
+        echo "  Not embedding: ${lib}"
+      fi
+    fi
+  done
+}
+
+copyBuildProduct() {
+  cp -ac "${SPM_EXECUTABLE_BUILD_PRODUCT}" \
+         "${LAMBDA_BUILD_DIR}/${LAMBDA_EXECUTABLE_NAME}"
+}
+
+copyProductResources() {
+  # make configurable somehow
+  for dir in ${LAMBDA_SOURCE_RELATIVE_RESOURCEDIRS}; do
+    embedSourcesDirInZip $dir
+  done
+}
+
+zipBuildDir() {
+  # X          - exclude extended attributes
+  # 9          - higher compression
+  # q          - quiet, no logging
+  # r          - recursive
+  # --symlinks - do not resolve symlinks, store them as is (not required?)
+  (cd "${LAMBDA_BUILD_DIR}" && zip -X -9 -q -r --symlinks "${LAMBDA_ZIP_FILE}" *)
+  if [[ ! -f "${LAMBDA_ZIP_FILE}" ]]; then
+    echo "Failed to zip Lambda build dir: ${LAMBDA_BUILD_DIR}"
+    exit 55
+  fi
+}
+
+
+# ********** Bundle & Zip **************************
+
+if [[ "x${verbose}" = "xyes" ]]; then
+  echo "Preparing build directory: ${LAMBDA_BUILD_DIR}"
+fi
+
+prepareLambdaDir
+copySharedLibraryDependencies
+copyBuildProduct
+copyProductResources
+
+if [[ "x${verbose}" = "xyes" ]]; then
+  echo -n "Zipping .."
+fi
+
+zipBuildDir
+
+if [[ "x${verbose}" = "xyes" ]]; then
+  ZIP_SIZE=$(du -h "${LAMBDA_ZIP_FILE}" | cut -f1 | tr -d '[:space:]')
+  BUNDLE_SIZE=$(du -sh "${LAMBDA_BUILD_DIR}" | cut -f1 | tr -d '[:space:]')
+  echo ".. done, size: ${ZIP_SIZE} (unpacked ${BUNDLE_SIZE})"
+else
+  echo "Lambda: $(basename ${LAMBDA_ZIP_FILE})"
+fi

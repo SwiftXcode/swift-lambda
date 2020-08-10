@@ -1,0 +1,256 @@
+#!/bin/bash
+#
+# Copyright 2017-2020 ZeeZide GmbH. All rights reserved.
+#
+# swift-lambda -- A collection of SwiftPM extensions to deal with building
+#                 AWS Lambda Swift projects.
+#
+# Additional variables used:
+#
+#     SPM_TARGET_BUILT_DIR        - .build/arm64-apple-ios7.0
+#     SPM_TARGET_BUILT_CONFIG_DIR - .build/arm64-apple-ios7.0/debug
+#
+
+ARGS="$@"
+#set -ve
+#set -e
+
+#aws lambda update-function-code \
+#  --function-name $(LAMBDA_FUNCTION) \
+#  --publish \
+#  --zip-file fileb://$(LAMBDA_ZIP_FILE)
+
+# usage
+
+usage() {
+	echo "usage: swift lambda deploy [options]"
+  echo
+  echo "  -f, --function <name>"
+  echo "  -p, --product  <product>"
+  echo "  -t, --template <SAM template>     (optional)"
+  echo "  --stack-name   <SAM stackname>    (optional)"
+  echo
+  echo "If no function/product name is provided, the current directory"
+  echo "will be used."
+  echo
+  echo "Build Options:"
+  echo "  --skip-build                      (do not invoke swift lambda build)"
+  echo "  -c, --configuration debug|release [default: debug]"
+  echo "  -d, --destination <dest>"
+  echo "  --static"
+  echo "  --static-libs <libs>"
+  echo
+  echo "Options:"
+  echo "  -v, --verbose"
+  echo "  -s, --silent"
+  echo
+}
+
+
+# ********** Parse Arguments ********************
+
+while [[ $# -gt 0 ]]; do
+  arg="$1"
+  case $arg in
+    -v|--verbose)
+      shift
+      verbose=yes
+      ;;
+    -s|--silent)
+      shift
+      verbose=no
+      ;;
+    --skip-build)
+      shift
+      SKIP_BUILD=yes
+      ;;
+    -c|--configuration)
+      CONFIGURATION="$2"
+      shift
+      shift
+      ;;
+    -p|--product)
+      PRODUCT_NAME="$2"
+      if [[ "x${FUNCTION_NAME}" == "x" ]]; then
+        FUNCTION_NAME="${PRODUCT_NAME}"
+      fi
+      shift
+      shift
+      ;;
+    -f|--function)
+      FUNCTION_NAME="$2"
+      shift
+      shift
+      ;;
+    -t|--template)
+      SAM_TEMPLATE_NAME="$2"
+      shift
+      shift
+      ;;
+    --stack-name)
+      SAM_STACK_NAME="$2"
+      shift
+      shift
+      ;;
+    -d|--destination)
+      # FIXME: make this more generic
+      if [[ "$2" == "5.2" ]]; then
+        SPM_DESTINATION=/usr/local/lib/swift/dst/x86_64-unknown-linux/swift-5.2-amazonlinux2.xtoolchain
+      elif [[ "$2" == "5.3" ]]; then
+        SPM_DESTINATION=/usr/local/lib/swift/dst/x86_64-unknown-linux/swift-5.3-amazonlinux2.xtoolchain
+      else
+        SPM_DESTINATION="$2"
+      fi
+      shift
+      shift
+      ;;
+    --static)
+      shift
+      static=yes
+      ;;
+    --static-libs)
+      static="yes"
+      static_libs="$2"
+      shift
+      shift
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      echo "Unknown argument: $1"
+      echo
+      usage
+      exit 99
+      ;;
+  esac
+done
+
+verbose=${verbose:=no}
+spm_verbose=${spm_verbose:=no}
+
+SCRIPT_START_TS=$(date +%s)
+SCRIPT_DIR=$(dirname "$0")
+
+# ********** Load common stuff ******************
+
+if [[ "x${SWIFT_LAMBDA_ENV_SOURCED}" != "yes" ]]; then
+  SWIFT_LAMBDA_ENV_SOURCED=yes verbose=no . "${SCRIPT_DIR}/swift-lambda-env"
+  rc=$?; if [ $rc -ne 0 ]; then exit $rc; fi
+fi
+
+
+# ********** Additional Config ******************
+
+FUNCTION_NAME=${FUNCTION_NAME:=${PRODUCT_NAME}}
+
+if hash aws 2>/dev/null; then
+  AWS_TOOL=aws
+fi
+if hash sam 2>/dev/null; then
+  AWS_SAM_TOOL=sam
+fi
+
+if [[ "x$verbose" = "xyes" ]]; then
+  echo "Deploying ${FUNCTION_NAME}"
+  echo
+  
+  if [[ "x${AWS_TOOL}" != "x" ]]; then x="available"
+  else x="not-available"; fi
+  echo "  AWS     tool: ${x}"
+  
+  if [[ "x${AWS_SAM_TOOL}" != "x" ]]; then x="available"
+  else x="not-available"; fi
+  echo "  AWS SAM tool: ${x}"
+
+  if [[ "x${SAM_TEMPLATE_NAME}" != "x" ]]; then
+    echo "  Deploy using: 'sam deploy'"
+  else
+    echo "  Deploy using: 'aws lambda update-function-code'"
+  fi
+  
+  echo
+fi
+
+
+# ********** SAM Templates **********************
+
+#
+# OK, we should extend this so, that we take the template and fill in
+# variables (like the zipfile location), similar to what `swift apache` does
+# with httpd.conf files.
+#
+
+if [[ "x${SAM_TEMPLATE_NAME}" != "x" ]]; then
+  if [[ -f "${SAM_TEMPLATE_NAME}" ]]; then
+    SAM_TEMPLATE_FILE="${SAM_TEMPLATE_NAME}"
+  elif [[ -f "SAM/${SAM_TEMPLATE_NAME}" ]]; then
+    SAM_TEMPLATE_FILE="SAM/${SAM_TEMPLATE_NAME}.yaml"
+  else
+    echo "Could not locate SAM template: ${SAM_TEMPLATE_NAME}"
+    exit 54
+  fi
+  
+  if [[ "x${AWS_SAM_TOOL}" = "x" ]]; then
+    echo "SAM deployment selected, but 'sam' tool is not installed?"
+    echo
+    echo "The AWS 'sam' tool can be installed using:"
+    echo
+    echo "   brew install aws/tap/aws-sam-cli"
+    echo
+    exit 55
+  fi
+fi
+
+
+# ********** Build Lambda Zip *******************
+
+if [[ "x${SKIP_BUILD}" = "xyes" ]]; then
+  if [[ ! -f "${LAMBDA_ZIP_FILE}" ]]; then
+    echo "Missing build result: ${LAMBDA_ZIP_FILE}"
+    exit 33
+  fi
+  if [[ "x$verbose" = "xyes" ]]; then
+    echo "Skipping build, zip:" 
+    echo "  ${LAMBDA_ZIP_FILE}"
+  fi
+else
+  . "${SCRIPT_DIR}/swift-lambda-build"
+fi
+
+
+# ********** Deploy ******************************
+
+ZIP_SIZE=$(du -h "${LAMBDA_ZIP_FILE}" | cut -f1 | tr -d '[:space:]')
+
+directDeploy() {
+  if [[ "x${verbose}" = "xyes" ]]; then
+    echo "Starting direct deployment (size ${ZIP_SIZE}) ..."
+  fi
+  ${AWS_TOOL} lambda update-function-code \
+    --function-name "${FUNCTION_NAME}" \
+    --publish \
+    --zip-file fileb://${LAMBDA_ZIP_FILE} \
+  | jq .
+}
+
+samDeploy() {
+  if [[ "x${verbose}" = "xyes" ]]; then
+    echo "Starting SAM deployment ..."
+  fi
+  SAM_OPTS=""
+  if [[ "x${SAM_STACK_NAME}" != "x" ]]; then
+    SAM_OPTS="${SAM_OPTS} --stack-name ${SAM_STACK_NAME}"
+  fi
+  ${AWS_SAM_TOOL} deploy --template "${SAM_TEMPLATE_FILE}" ${SAM_OPTS}
+}
+
+
+# ********** Run *********************************
+
+if [[ "x${SAM_TEMPLATE_FILE}" != "x" ]]; then
+  samDeploy
+else
+  directDeploy
+fi

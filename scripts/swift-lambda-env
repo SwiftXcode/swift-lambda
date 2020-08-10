@@ -1,0 +1,295 @@
+#!/bin/bash
+#
+# Copyright 2017-2020 ZeeZide GmbH. All rights reserved.
+#
+# swift-lambda -- A collection of SwiftPM extensions to deal with building
+#                 AWS Lambda Swift projects.
+#
+# General processing
+#
+#     static                  - yes/no (yes)   
+#     verbose                 - yes/no (yes)
+#     spm_verbose             - yes/no (no)
+#     static_libs             - c CoreFoundation CFXMLInterface FoundationXML
+#                               icui18nswift icuucswift icudataswift
+#                               DispatchStubs xml2 uuid dl
+#
+# Cross Variables
+#
+#     TARGET_LLD
+#     LAMBDA_BUILD_DIR        - ${SPM_BUILD_DIR}/lambda
+#     LAMBDA_EXECUTABLE_NAME  - bootstrap
+#
+# Xcode variables we use (and set when missing):
+# - well, not really for Lambda. For Lambda we always want to build for
+#   x86_64/AmazonLinux2
+#
+#     SRCROOT                 - actually the _package_ root (SRCROOT of Xcode)
+#     CONFIGURATION           - Debug or Release
+#     PRODUCT_NAME            - name of package (defaults to current dirname)
+#     TOOLCHAIN_DIR           - toolchain to use
+#     DT_TOOLCHAIN_DIR        - toolchain to use, backup
+#     BUILD_DIR               - defaults to Xcode temp location, or .build
+#     CONFIGURATION_BUILD_DIR - careful, this is relative in Xcode itself
+#     CONFIGURATION_TEMP_DIR  - careful, this is relative in Xcode itself
+#     PLATFORM_NAME           - e.g. amazonlinux2 / ubuntu16.04
+#     PLATFORM_PREFERRED_ARCH - e.g. arm64    / x86_64
+#     CURRENT_ARCH            - e.g. arm64    / x86_64
+#     TARGET                  - arm64-unknown-linux
+#     SWIFT_PLATFORM_TARGET_PREFIX - ios / macosx (vs iphoneos!)
+#     DEPLOYMENT_TARGET_SETTING_NAME - MACOSX_DEPLOYMENT_TARGET /
+#                                      IPHONEOS_DEPLOYMENT_TARGET
+#
+# Swift Environment variables
+#
+#     SWIFT_DRIVER            - path to `swift` binary (can be relative)
+#     SWIFT_ABI_RELDIR        - e.g. "swift5.0"
+#     SPM_BUILD_CONFIG        - debug or release (lowercase)
+#     SPM_BUILD_RELDIR        - .build
+#     SPM_PACKAGE_SOURCE_DIR  - ${SRCROOT}/${PRODUCT_NAME} (or other)
+#     SPM_PACKAGE_DIR         - ${SRCROOT}/${PRODUCT_NAME} (or other)
+#     SPM_BUILD_DIR           - ${SPM_PACKAGE_DIR}/.build
+#     SPM_MODULE_BUILD_SUFFIX - .build - suffix of built submodules!
+#     SPM_CONFIG              - absolute location of Package.swift
+#     SPM_BINPATH_TARGET      - x86_64-apple-macosx10.10
+#     SWIFT_SYSTEM_DIR        - include for UIKit and such
+#     SPM_USE_BITCODE         - yes/no
+#     SWIFT_VERSION           - e.g. 5.3 (as reported by swift -version)
+#     SWIFT_MAJOR             - e.g. 5
+#     SWIFT_MINOR             - e.g. 3
+#     SWIFT_SUBMINOR          - e.g. 0 (defaults to 0 if none in version)
+#
+# Platform and Images
+#
+#     SPM_PLATFORM_NAME       - e.g. macosx (vs macOS in PLATFORM_NAME :-/)
+#     BUILDING_IN_HOMEBREW    - yes/no
+#     SPM_DESTINATIONS_DIR    - e.g. /usr/local/lib/swift/dst
+#     SPM_DESTINATION         - e.g.:
+# /usr/local/lib/swift/dst/x86_64-unknown-linux/swift-5.3-amazonlinux2.xtoolchain
+#     SPM_DESTINATION_FILE    - the above + "/destination.json"
+#
+ARGS="$@"
+#set -ve
+#set -e
+
+verbose=${verbose:=yes}
+static=${static:=no}
+if [[ "x${static}" = "xyes" ]]; then
+  # linking higher level stuff doesn't work quite right yet
+  #static_libs=${static_libs:=CoreFoundation CFXMLInterface FoundationXML icui18nswift icuucswift icudataswift DispatchStubs}
+  static_libs=${static_libs:=icui18nswift icuucswift icudataswift DispatchStubs dispatch}
+  IFS=', ' read -r -a static_libs_a <<< "$static_libs"
+else
+  static_libs=
+  static_libs_a=()
+fi
+
+
+BUILD_IN_XCODE=no
+if [[ -d "$PWD/Sources" ]]; then
+  SRCROOT=${SRCROOT:=$PWD} # CAREFUL - Different Meaning!!!
+else
+  echo "Not running as part of Xcode or within a package?!"
+  exit 1
+fi
+
+if [[ -z ${HOMEBREW_CC+x} ]]; then # not in Homebrew
+  BUILDING_IN_HOMEBREW=no
+else
+  BUILDING_IN_HOMEBREW=yes
+fi
+
+
+# ********* Default Values when running outside of Xcode *********
+
+CONFIGURATION=${CONFIGURATION:=Release}
+PRODUCT_NAME=${PRODUCT_NAME:=$(basename $PWD)}
+TOOLCHAIN_DIR=${TOOLCHAIN_DIR:=${DT_TOOLCHAIN_DIR}}
+
+if [[ "x${TOOLCHAIN_DIR}" = "x" ]]; then
+  # a little whacky
+  SWIFT_DRIVER=$(xcrun --toolchain swift-latest -f swift)
+  TOOLCHAIN_DIR=$(echo ${SWIFT_DRIVER} | sed s#/usr/bin/swift##)
+else
+  # use PATH lookup as set by Xcode
+  SWIFT_DRIVER=swift
+fi
+
+DT_TOOLCHAIN_DIR=${DT_TOOLCHAIN_DIR:=${TOOLCHAIN_DIR}}
+
+
+# ********** Swift version **********
+
+SWIFT_DRIVER_VERSION="$(${SWIFT_DRIVER} --version | head -1 | sed 's/^.*[Vv]ersion[\t ]*\([.[:digit:]]*\).*$/\1/g')"
+SWIFT_VERSION=${SWIFT_VERSION:=${SWIFT_DRIVER_VERSION}}
+declare -a SWIFT_VERSION_LIST="(${SWIFT_VERSION//./ })"
+SWIFT_MAJOR=${SWIFT_VERSION_LIST[0]}
+SWIFT_MINOR=${SWIFT_VERSION_LIST[1]}
+SWIFT_SUBMINOR_OPT=${SWIFT_VERSION_LIST[2]}
+SWIFT_SUBMINOR=${SWIFT_SUBMINOR_OPT:=0}
+  
+if [[ ${SWIFT_MAJOR} -ge 5 ]]; then
+  SWIFT_ABI_RELDIR="swift${SWIFT_MAJOR}.${SWIFT_MINOR}"
+else
+  # FIXME: ABI is still incompatible between 4.0.2 and 4.0.3 etc
+  SWIFT_ABI_RELDIR="swift${SWIFT_MAJOR}.${SWIFT_MINOR}"
+fi
+  
+
+# ********** OS Environment **********
+
+if [[ "x${CURRENT_ARCH}" = "xundefined_arch" ]]; then
+  ORIGINAL_CURRENT_ARCH="${CURRENT_ARCH}"
+  unset CURRENT_ARCH
+fi
+if [[ "x${arch}" = "xundefined_arch" ]]; then
+  ORIGINAL_arch="${arch}"
+  unset arch
+fi
+
+# AmazonLinux2 hardcoded (SwiftXcode looks up)
+PLATFORM_NAME="${PLATFORM_NAME:-amazonlinux2}"
+PLATFORM_PREFERRED_ARCH="${PLATFORM_PREFERRED_ARCH:-x86_64}"
+CURRENT_ARCH="${CURRENT_ARCH:-${PLATFORM_PREFERRED_ARCH}}"
+SPM_PLATFORM_NAME="${SPM_PLATFORM_NAME:-${PLATFORM_NAME}}"
+DEPLOYMENT_TARGET_SETTING_NAME="${DEPLOYMENT_TARGET_SETTING_NAME:-LAMBDA_DEPLOYMENT_TARGET}"
+
+if [[ "x${DEPLOYMENT_TARGET_SETTING_NAME}" = "xMACOSX_DEPLOYMENT_TARGET" ]]; then
+  if [[ "x${MACOSX_DEPLOYMENT_TARGET}" = "x" ]]; then
+    MACOS_VERSION="$(sw_vers -productVersion)"
+    declare -a MACOS_VERSION_LIST="(${MACOS_VERSION//./ })"
+    MACOSX_DEPLOYMENT_TARGET="${MACOS_VERSION_LIST[0]}.${MACOS_VERSION_LIST[1]}"
+  fi
+fi
+
+if [[ "x${SWIFT_PLATFORM_TARGET_PREFIX}" = "x" ]]; then
+  if [[ "x${PLATFORM_NAME}" = "xiphoneos" ]]; then
+    SWIFT_PLATFORM_TARGET_PREFIX=ios
+  else
+    SWIFT_PLATFORM_TARGET_PREFIX="${PLATFORM_NAME}"
+  fi
+fi
+
+# TODO: only include -apple- on apple, but doesn't matter right now
+if [[ "x${PLATFORM_NAME}" = "xamazonlinux2" ]]; then
+  TARGET="${CURRENT_ARCH}-unknown-linux"
+  SPM_USE_BITCODE=no
+else
+  TARGET="${CURRENT_ARCH}-apple-${SWIFT_PLATFORM_TARGET_PREFIX}${!DEPLOYMENT_TARGET_SETTING_NAME}"
+  if [[ "x${SWIFT_PLATFORM_TARGET_PREFIX}" = "xmacosx" ]]; then
+    SPM_USE_BITCODE=no
+  else
+    SPM_USE_BITCODE=yes
+  fi
+fi
+
+# ********** Swift System Dir *******
+
+if [[ "x${TOOLCHAIN_DIR}" != "x" ]]; then
+  SWIFT_SYSTEM_DIR="${TOOLCHAIN_DIR}/usr/lib/swift/${PLATFORM_NAME}/${PLATFORM_PREFERRED_ARCH}"
+  if [[ ! -d "${SWIFT_SYSTEM_DIR}" ]]; then
+    SWIFT_SYSTEM_DIR=""
+  fi
+fi
+
+
+# ********** SPM Environment **********
+
+SPM_BUILD_CONFIG="$(echo ${CONFIGURATION} | tr '[:upper:]' '[:lower:]')"
+SPM_BUILD_RELDIR=".build"
+SPM_MODULE_BUILD_SUFFIX=".build"
+
+# Mobile Cows/Mobile Cows/.build/x86_64-apple-macosx10.10/debug
+SPM_BINPATH=$(swift build --show-bin-path) 
+
+SPM_BINPATH_PARENT=$(dirname "${SPM_BINPATH}")
+SPM_BINPATH_TARGET=$(basename "${SPM_BINPATH_PARENT}")
+if [[ "x${BUILD_IN_XCODE}" = "xyes" ]]; then
+  SPM_PACKAGE_SOURCE_DIR="${SRCROOT}/${PRODUCT_NAME}"
+  
+  # TODO:
+  # I'd prefer to use ${CONFIGURATION_TEMP_DIR} here, but unfortunately we
+  # can't refer to it from SHARED_SETTINGS directly (not an absolute path
+  # within Xcode).
+  # I think it is possible using header-maps or such, but lets keep going ;-)
+  #
+  # This actually *builds* fine, but Xcode itself can't find the stuff
+  # if [[ "x${CONFIGURATION_TEMP_DIR}" = "x" ]]; then
+  #   SPM_PACKAGE_DIR="${SRCROOT}/${PRODUCT_NAME}"
+  # else
+  #   SPM_PACKAGE_DIR="${CONFIGURATION_TEMP_DIR}"
+  # fi
+  SPM_PACKAGE_DIR="${SRCROOT}/${PRODUCT_NAME}/.buildzz"
+else
+  SPM_PACKAGE_SOURCE_DIR="${SRCROOT}"
+  SPM_PACKAGE_DIR="${SPM_PACKAGE_SOURCE_DIR}"
+fi
+SPM_BUILD_DIR="${SPM_PACKAGE_DIR}/${SPM_BUILD_RELDIR}"
+
+if [[ "x${BUILD_DIR}" = "x" ]]; then # outside Xcode
+  BUILD_DIR="${SPM_BUILD_DIR}"
+fi
+
+# TBD
+if [[ -f "${SPM_PACKAGE_SOURCE_DIR}/Package@swift-4.swift" ]]; then
+  SPM_CONFIG="${SPM_PACKAGE_SOURCE_DIR}/Package@swift-4.swift"
+else
+  SPM_CONFIG="${SPM_PACKAGE_SOURCE_DIR}/Package.swift"
+fi
+
+SPM_EXECUTABLE_BUILD_PRODUCT="${SPM_BUILD_DIR}/${TARGET}/${SPM_BUILD_CONFIG}/${PRODUCT_NAME}"
+
+LAMBDA_BUILD_DIR=${LAMBDA_BUILD_DIR:=${BUILD_DIR}/lambda}
+LAMBDA_EXECUTABLE_NAME=bootstrap
+
+LAMBDA_SOURCE_RELATIVE_RESOURCEDIRS=${LAMBDA_SOURCE_RELATIVE_RESOURCEDIRS:=views public}
+
+LAMBDA_ZIP_FILE=${LAMBDA_ZIP_FILE:=${LAMBDA_BUILD_DIR}/${PRODUCT_NAME}.zip}
+
+# ********** Derive more Xcode settings ********
+
+if [[ "x${CONFIGURATION_BUILD_DIR}" = "x" ]]; then
+  CONFIGURATION_BUILD_DIR="${SPM_BUILD_DIR}/${SPM_BUILD_CONFIG}"
+fi
+if [[ "x${CONFIGURATION_TEMP_DIR}" = "x" ]]; then
+  CONFIGURATION_TEMP_DIR="${CONFIGURATION_BUILD_DIR}"
+fi
+
+
+# ********** Cross Compilation Settings ********
+
+SPM_DESTINATIONS_DIR=${SPM_DESTINATIONS_DIR:=/usr/local/lib/swift/dst}
+SPM_DESTINATION=${SPM_DESTINATION:=${SPM_DESTINATIONS_DIR}/${TARGET}/swift-${SWIFT_MAJOR}.${SWIFT_MINOR}-${PLATFORM_NAME}.xtoolchain}
+SPM_DESTINATION_FILE=${SPM_DESTINATION_FILE:=${SPM_DESTINATION}/destination.json}
+TARGET_LLD=${TARGET_LLD:=${SPM_DESTINATION}/swift.xctoolchain/usr/bin/ld.lld}
+
+# ********** Log Environment *************
+
+if [[ "x$verbose" = "xyes" ]]; then
+  echo "Environment:"
+  echo "  Static:        ${static}"
+  echo "  Static Libs:   ${static_libs}"
+  echo "  LLD:           ${TARGET_LLD}"
+  echo "  Xcode:         ${BUILD_IN_XCODE}"
+  echo "  Configuration: ${CONFIGURATION} / ${SPM_BUILD_CONFIG}"
+  echo "  Product:       ${PRODUCT_NAME}"
+  echo "  Toolchain:     ${DT_TOOLCHAIN_DIR}"
+  echo "  Driver:        ${SWIFT_DRIVER}"
+  echo "  Swift Version: ${SWIFT_MAJOR}.${SWIFT_MINOR}.${SWIFT_SUBMINOR} (${SWIFT_VERSION})"
+  echo "  Xcode .build:  ${BUILD_DIR}"
+  echo "  Xcode tmpdir:  ${CONFIGURATION_TEMP_DIR}"
+  echo "  System Inc:    ${SWIFT_SYSTEM_DIR}"
+  echo "SPM:"
+  echo "  Source dir:    ${SPM_PACKAGE_SOURCE_DIR}"
+  echo "  Package dir:   ${SPM_PACKAGE_DIR}"
+  echo "  Manifest:      ${SPM_CONFIG}"
+  echo "  SPM .build:    ${SPM_BUILD_DIR}"
+  echo "Platform/ABI:"
+  echo "  Platform:      ${SPM_PLATFORM_NAME} ${CURRENT_ARCH} ${PLATFORM_NAME}"
+  echo "  Target:        ${TARGET} bitcode=${SPM_USE_BITCODE}"
+  echo "  ABI:           ${SWIFT_ABI_RELDIR}"
+  echo "  Destination:   ${SPM_DESTINATION}"
+  echo "Lambda:"
+  echo "  Build dir:     ${LAMBDA_BUILD_DIR}"
+  echo "  Zip:           ${LAMBDA_ZIP_FILE}"
+fi
