@@ -166,7 +166,26 @@ Options:
 
 ```
 
-### Links
+
+## Issues & Caveats
+
+- There is no "direct" Xcode support yet, i.e. the package needs to be
+  created using a `Package.swift` (vs create a new tool project in Xcode).
+  We might address that and even provide a SwiftXcode style Lambda Xcode
+  template. Direct deployment from within Xcode should be possible.
+- C++ support seems b0rked right now. Regular C code compile just fine
+  (e.g. SwiftNIO includes some).
+- `swift lambda build` has some support for static linking already builtin,
+  but it doesn't fully work yet. To be fixed.
+  (static linking reduces the size of the zip and further improves Lambda
+   startup time).
+- There is no Swift 5.3 toolchain for Amazon Linux yet (just 5.2).
+- The X toolchains only have the packages that seemed necessary. If someone
+  needs additionals ones please file an issue (the toolchains can carry lots
+  of dev packages, that's perfectly fine).
+
+
+## Links
 
 - [SPMDestinations](https://github.com/SPMDestinations/homebrew-tap)
 - [MacroLambda](https://github.com/Macro-swift/MacroLambda)
