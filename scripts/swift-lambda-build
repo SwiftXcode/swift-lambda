@@ -255,7 +255,7 @@ spmBuild() {
   
   # use static linking for Lambda
   if [[ "x${static}" = "xyes" ]]; then
-    STATIC_LINK_OPT="-Xswiftc -static-stdlib"
+    STATIC_LINK_OPT="-Xswiftc -static-stdlib -Xswiftc -static-executable"
     for static_lib in "${static_libs_a[@]}"; do
       STATIC_LINK_OPT="${STATIC_LINK_OPT} -Xswiftc -l${static_lib}"
     done

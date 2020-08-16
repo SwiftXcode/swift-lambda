@@ -77,13 +77,12 @@ static=${static:=no}
 if [[ "x${static}" = "xyes" ]]; then
   # linking higher level stuff doesn't work quite right yet
   #static_libs=${static_libs:=CoreFoundation CFXMLInterface FoundationXML icui18nswift icuucswift icudataswift DispatchStubs}
-  static_libs=${static_libs:=icui18nswift icuucswift icudataswift DispatchStubs dispatch}
+  static_libs=${static_libs:=icui18nswift icuucswift icudataswift DispatchStubs dispatch atomic}
   IFS=', ' read -r -a static_libs_a <<< "$static_libs"
 else
   static_libs=
   static_libs_a=()
 fi
-
 
 BUILD_IN_XCODE=no
 if [[ -d "$PWD/Sources" ]]; then
