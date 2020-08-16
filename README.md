@@ -103,13 +103,10 @@ else {
 }
 ```
 
-Build the package using `swift lambda build -d 5.2` and deploy it to AWS by
-calling `swift lambda deploy -d 5.2`. 
+Build the package using `swift lambda build` and deploy it to AWS by
+calling `swift lambda deploy`. 
 It expects a Lambda configuration called `HelloWorld` (select a different
 function using the `-f` argument).
-
-> The `-d 5.2` is necessary until AmazonLinux 5.3 development toolchains are
-> available.
 
 A more complex example:
 [express-simple-lambda](https://github.com/Macro-swift/Examples/tree/feature/lambda-express-1/Sources/express-simple-lambda),
