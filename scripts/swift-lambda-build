@@ -254,7 +254,7 @@ spmBuild() {
   TARGET_OPT="${SWIFT_TARGET_OPT} ${SWIFT_TARGET_OPT//Xswiftc/Xcc} -Xcc -Wno-unused-command-line-argument"
   
   # use static linking for Lambda
-  if [[ "x${static}" = "yes" ]]; then
+  if [[ "x${static}" = "xyes" ]]; then
     STATIC_LINK_OPT="-Xswiftc -static-stdlib"
     for static_lib in "${static_libs_a[@]}"; do
       STATIC_LINK_OPT="${STATIC_LINK_OPT} -Xswiftc -l${static_lib}"
