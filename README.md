@@ -182,8 +182,6 @@ Options:
   (static linking reduces the size of the zip and further improves Lambda
    startup time).
   ([Issue 3](https://github.com/SwiftXcode/swift-lambda/issues/3))
-- There is no Swift 5.3 toolchain for Amazon Linux yet (just 5.2).
-  ([SPMDestinations Issue #5](https://github.com/SPMDestinations/homebrew-tap/issues/5))
 - The X toolchains only have the packages that seemed necessary. If someone
   needs additionals ones please file an issue (the toolchains can carry lots
   of dev packages, that's perfectly fine).
