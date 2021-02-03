@@ -255,7 +255,7 @@ spmBuild() {
   
   # use static linking for Lambda
   if [[ "x${static}" = "xyes" ]]; then
-    STATIC_LINK_OPT="-Xswiftc -static-stdlib"
+    STATIC_LINK_OPT="-Xswiftc -static-stdlib -Xswiftc -static-executable"
     for static_lib in "${static_libs_a[@]}"; do
       STATIC_LINK_OPT="${STATIC_LINK_OPT} -Xswiftc -l${static_lib}"
     done
@@ -326,17 +326,22 @@ fi
 
 # ********** Archive ****************************
 
+# Drop and recreate the LAMBDA_BUILD_DIR (defaults to `.build/lambda`)
 prepareLambdaDir() {
   rm   -rf "${LAMBDA_BUILD_DIR}"
   mkdir -p "${LAMBDA_BUILD_DIR}"
 }
 
+# Clone copy the file passed in Argument $1 into the LAMBDA_BUILD_DIR (defaults
+# to `.build/lambda`)
 embedInZip() {
   # a - preserve attributes
   # c - clone
   # H - follow symbolic links
   cp -acH "$1" "${LAMBDA_BUILD_DIR}/"
 }
+# This embeds a subdirectory contains within the product directory in the
+# Zip directory. For example Sources/MacroApp/public.
 embedSourcesDirInZip() {
   if [[ -d "${SPM_PACKAGE_SOURCE_DIR}/Sources/${PRODUCT_NAME}/$1" ]]; then
     if [[ "x${verbose}" = "xyes" ]]; then
@@ -351,6 +356,9 @@ embedSourcesDirInZip() {
   fi
 }
 
+# This copies dylibs required by the built product (in .build/x86_64.../release)
+# to the zip.
+# It uses `objdump` to discover the required libs.
 copySharedLibraryDependencies() {
   XTOOLCHAIN_SDK=$(jq -r ".sdk" ${SPM_DESTINATION_FILE})
   USED_LIBS=$(objdump -p ${SPM_BUILD_DIR}/${TARGET}/${SPM_BUILD_CONFIG}/${PRODUCT_NAME} \
@@ -396,18 +404,36 @@ copySharedLibraryDependencies() {
   done
 }
 
+# This just copies the executable product into the LAMBDA_BUILD_DIR
 copyBuildProduct() {
   cp -ac "${SPM_EXECUTABLE_BUILD_PRODUCT}" \
          "${LAMBDA_BUILD_DIR}/${LAMBDA_EXECUTABLE_NAME}"
 }
 
+# This copies Macro-like product resource directories into the zip. Those live
+# alongside the source files, for example Sources/MacroApp/public (and /view).
+# Note: do not mix up w/ SPM resource directories, which work differently.
 copyProductResources() {
   # make configurable somehow
+  # defaults to: views public
   for dir in ${LAMBDA_SOURCE_RELATIVE_RESOURCEDIRS}; do
     embedSourcesDirInZip $dir
   done
 }
 
+# This copies SwiftPM resource directories into the LAMBDA_BUILD_DIR (defaults
+# to `.build/lambda`).
+# SPM puts the resource directories into SPM_BUILD_PRODUCT_RESOURCES_DIR,
+# for example `PhoneNumberKit_PhoneNumberKit.resources`.
+copySwiftPMResources() {
+  for dir in $(ls 2>/dev/null -d "${SPM_BUILD_PRODUCT_RESOURCES_DIR}/"*.resources); do
+    echo "  Embedding package resource dir: $(basename $dir)"
+    cp -ac "${dir}" "${LAMBDA_BUILD_DIR}/"
+  done
+}
+
+# This zips the LAMBDA_BUILD_DIR (.build/lambda) into a zipfile for 
+# distribution.
 zipBuildDir() {
   # X          - exclude extended attributes
   # 9          - higher compression
@@ -432,6 +458,7 @@ prepareLambdaDir
 copySharedLibraryDependencies
 copyBuildProduct
 copyProductResources
+copySwiftPMResources
 
 if [[ "x${verbose}" = "xyes" ]]; then
   echo -n "Zipping .."

@@ -22,9 +22,7 @@ A built Swift lambda can then be deployed using `swift lambda deploy`
 
 Blog article: [Deploying Swift on AWS Lambda](http://www.alwaysrightinstitute.com/macrolambda/).
 
-Note: Due to a [bug](https://bugs.swift.org/browse/SR-13312) 
-      in Xcode 11's Swift 5.2.4, a Swift 5.3 install (e.g. Xcode beta 12) is 
-      currently required.
+Note: Requires a Swift 5.3 install (e.g. Xcode 12+).
 
 
 ## Installation
@@ -182,8 +180,6 @@ Options:
   (static linking reduces the size of the zip and further improves Lambda
    startup time).
   ([Issue 3](https://github.com/SwiftXcode/swift-lambda/issues/3))
-- There is no Swift 5.3 toolchain for Amazon Linux yet (just 5.2).
-  ([SPMDestinations Issue #5](https://github.com/SPMDestinations/homebrew-tap/issues/5))
 - The X toolchains only have the packages that seemed necessary. If someone
   needs additionals ones please file an issue (the toolchains can carry lots
   of dev packages, that's perfectly fine).

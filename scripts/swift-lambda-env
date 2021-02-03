@@ -77,13 +77,12 @@ static=${static:=no}
 if [[ "x${static}" = "xyes" ]]; then
   # linking higher level stuff doesn't work quite right yet
   #static_libs=${static_libs:=CoreFoundation CFXMLInterface FoundationXML icui18nswift icuucswift icudataswift DispatchStubs}
-  static_libs=${static_libs:=icui18nswift icuucswift icudataswift DispatchStubs dispatch}
+  static_libs=${static_libs:=CoreFoundation uuid icui18nswift icuucswift icudataswift DispatchStubs dispatch atomic}
   IFS=', ' read -r -a static_libs_a <<< "$static_libs"
 else
   static_libs=
   static_libs_a=()
 fi
-
 
 BUILD_IN_XCODE=no
 if [[ -d "$PWD/Sources" ]]; then
@@ -238,6 +237,7 @@ else
 fi
 
 SPM_EXECUTABLE_BUILD_PRODUCT="${SPM_BUILD_DIR}/${TARGET}/${SPM_BUILD_CONFIG}/${PRODUCT_NAME}"
+SPM_BUILD_PRODUCT_RESOURCES_DIR="${SPM_BUILD_DIR}/${TARGET}/${SPM_BUILD_CONFIG}"
 
 LAMBDA_BUILD_DIR=${LAMBDA_BUILD_DIR:=${BUILD_DIR}/lambda}
 LAMBDA_EXECUTABLE_NAME=bootstrap
