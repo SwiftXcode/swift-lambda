@@ -421,6 +421,17 @@ copyProductResources() {
   done
 }
 
+# This copies SwiftPM resource directories into the LAMBDA_BUILD_DIR (defaults
+# to `.build/lambda`).
+# SPM puts the resource directories into SPM_BUILD_PRODUCT_RESOURCES_DIR,
+# for example `PhoneNumberKit_PhoneNumberKit.resources`.
+copySwiftPMResources() {
+  for dir in $(ls 2>/dev/null -d "${SPM_BUILD_PRODUCT_RESOURCES_DIR}/"*.resources); do
+    echo "  Embedding package resource dir: $(basename $dir)"
+    cp -ac "${dir}" "${LAMBDA_BUILD_DIR}/"
+  done
+}
+
 # This zips the LAMBDA_BUILD_DIR (.build/lambda) into a zipfile for 
 # distribution.
 zipBuildDir() {
@@ -447,6 +458,7 @@ prepareLambdaDir
 copySharedLibraryDependencies
 copyBuildProduct
 copyProductResources
+copySwiftPMResources
 
 if [[ "x${verbose}" = "xyes" ]]; then
   echo -n "Zipping .."
